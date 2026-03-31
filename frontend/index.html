@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Digital Twin of ISS/ROSS Space Station - Interactive 3D Visualization" />
+    <meta name="theme-color" content="#000011" />
+    <title>Цифровой двойник МКС/РОСС | ISS/ROSS Digital Twin</title>
+    
+    <!-- Google Fonts: Orbitron (headers) + Exo 2 (body) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    
+    <!-- Favicon (inline SVG, no external file needed) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23000011' stroke='%2300d4ff' stroke-width='3'/><circle cx='50' cy='50' r='20' fill='%2300d4ff' opacity='0.8'/></svg>" />
+    
+    <!-- Cesium Widgets CSS (required for 3D globe controls) -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.139/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  </head>
+  <body>
+    <!-- React mount point -->
+    <div id="root"></div>
+    <!-- Entry script (Vite uses /src/ prefix for module resolution) -->
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

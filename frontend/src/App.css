@@ -1,0 +1,384 @@
+/* ============================================
+CYBERPUNK TERMINAL THEME - eDEX-UI STYLE
+============================================ */
+:root {
+  --terminal-bg: #0a0a0f;
+  --terminal-red: #ff2a2a;
+  --terminal-cyan: #00ffff;
+  --terminal-green: #00ff41;
+  --terminal-yellow: #fcee0a;
+  --terminal-dim: rgba(255, 42, 42, 0.2);
+  --grid-color: rgba(0, 255, 255, 0.03);
+  --scanline-color: rgba(0, 0, 0, 0.5);
+  --glow-red: 0 0 10px rgba(255, 42, 42, 0.8);
+  --glow-cyan: 0 0 10px rgba(0, 255, 255, 0.8);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Courier New', 'Consolas', monospace;
+  background: var(--terminal-bg);
+  color: var(--terminal-red);
+  overflow: hidden;
+  position: relative;
+}
+
+/* Scanline effect */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0),
+    rgba(255,255,255,0) 50%,
+    rgba(0,0,0,0.2) 50%,
+    rgba(0,0,0,0.2)
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 9999;
+  animation: scanline 8s linear infinite;
+}
+
+/* Grid background */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: 50px 50px;
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes scanline {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(10px); }
+}
+
+.app {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  grid-template-rows: 60px 1fr;
+  background: var(--terminal-bg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Header - Terminal style */
+.header {
+  grid-column: 1 / -1;
+  background: rgba(10, 10, 15, 0.95);
+  border-bottom: 2px solid var(--terminal-red);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 0 20px rgba(255, 42, 42, 0.3);
+  z-index: 1000;
+}
+
+.header-left h1 {
+  font-family: 'Courier New', monospace;
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--terminal-red);
+  text-shadow: var(--glow-red);
+  letter-spacing: 2px;
+  animation: glitch 3s infinite;
+}
+
+@keyframes glitch {
+  0%, 100% { text-shadow: var(--glow-red); }
+  33% { text-shadow: -2px 0 var(--terminal-cyan), 2px 0 var(--terminal-red); }
+  66% { text-shadow: 2px 0 var(--terminal-cyan), -2px 0 var(--terminal-red); }
+}
+
+.subtitle {
+  font-size: 0.75rem;
+  color: var(--terminal-cyan);
+  opacity: 0.8;
+  letter-spacing: 1px;
+}
+
+.header-right {
+  display: flex;
+  gap: 1rem;
+}
+
+.lang-btn, .verify-btn {
+  background: transparent;
+  border: 1px solid var(--terminal-red);
+  color: var(--terminal-red);
+  padding: 0.5rem 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.lang-btn:hover, .verify-btn:hover {
+  background: var(--terminal-red);
+  color: var(--terminal-bg);
+  box-shadow: var(--glow-red);
+}
+
+/* Sidebar - Terminal logs style */
+.sidebar {
+  background: rgba(10, 10, 15, 0.95);
+  border-right: 1px solid var(--terminal-dim);
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.control-group {
+  border: 1px solid var(--terminal-dim);
+  padding: 1rem;
+  background: rgba(255, 42, 42, 0.05);
+}
+
+.control-group h3 {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  color: var(--terminal-cyan);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--terminal-dim);
+  padding-bottom: 0.5rem;
+}
+
+/* Terminal-style sliders */
+.slider-container {
+  margin-bottom: 1rem;
+}
+
+.slider-container input[type="range"] {
+  width: 100%;
+  height: 4px;
+  background: var(--terminal-dim);
+  outline: none;
+  -webkit-appearance: none;
+  margin-bottom: 0.5rem;
+}
+
+.slider-container input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--terminal-red);
+  cursor: pointer;
+  box-shadow: var(--glow-red);
+}
+
+.slider-value {
+  font-family: 'Courier New', monospace;
+  color: var(--terminal-green);
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+/* Terminal button */
+.dock-btn {
+  width: 100%;
+  padding: 1rem;
+  background: transparent;
+  color: var(--terminal-red);
+  border: 2px solid var(--terminal-red);
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  margin-top: 1rem;
+}
+
+.dock-btn:hover:not(:disabled) {
+  background: var(--terminal-red);
+  color: var(--terminal-bg);
+  box-shadow: var(--glow-red);
+}
+
+.dock-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Terminal-style modules list */
+.modules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.module-toggle {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  border: 1px solid var(--terminal-dim);
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.module-toggle:hover {
+  background: rgba(255, 42, 42, 0.1);
+  border-color: var(--terminal-red);
+}
+
+.module-toggle input[type="checkbox"] {
+  margin-right: 0.5rem;
+  accent-color: var(--terminal-red);
+}
+
+.module-name {
+  flex: 1;
+  color: var(--terminal-cyan);
+}
+
+.module-type {
+  font-size: 0.7rem;
+  color: var(--terminal-dim);
+}
+
+/* Position info - Terminal style */
+.position-info, .ai-prediction {
+  border: 1px solid var(--terminal-dim);
+  padding: 1rem;
+  background: rgba(0, 255, 65, 0.05);
+}
+
+.position-info h3, .ai-prediction h3 {
+  font-family: 'Courier New', monospace;
+  color: var(--terminal-green);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+}
+
+.position-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.position-item .label {
+  color: var(--terminal-dim);
+}
+
+.position-item .value {
+  color: var(--terminal-green);
+  text-shadow: var(--glow-cyan);
+}
+
+/* Audit log - Terminal style */
+.audit-section {
+  border: 1px solid var(--terminal-dim);
+  padding: 1rem;
+  background: rgba(255, 193, 7, 0.05);
+}
+
+.audit-section h3 {
+  font-family: 'Courier New', monospace;
+  color: var(--terminal-yellow);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.audit-list {
+  max-height: 150px;
+  overflow-y: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+}
+
+.audit-item {
+  padding: 0.4rem;
+  margin-bottom: 0.3rem;
+  border-left: 2px solid var(--terminal-yellow);
+  background: rgba(255, 193, 7, 0.05);
+}
+
+.audit-time {
+  color: var(--terminal-dim);
+  display: block;
+  font-size: 0.7rem;
+}
+
+.audit-action {
+  color: var(--terminal-yellow);
+}
+
+/* Cesium Viewer - Earth on the right */
+.cesium-viewer {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  border-left: 2px solid var(--terminal-red);
+}
+
+/* System log overlay */
+.system-log {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: var(--terminal-dim);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.log-line {
+  margin-bottom: 0.25rem;
+  animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 60px 1fr 300px;
+  }
+  
+  .cesium-viewer {
+    grid-column: 1;
+    grid-row: 3;
+    border-left: none;
+    border-top: 2px solid var(--terminal-red);
+  }
+}
