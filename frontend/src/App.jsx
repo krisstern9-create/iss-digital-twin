@@ -1,785 +1,434 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import * as Cesium from 'cesium'
+import { useState, useRef, useCallback, Suspense } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { OrbitControls, Stars, Html, useGLTF } from '@react-three/drei'
+import * as THREE from 'three'
 import './App.css'
 
-// Устанавливаем токен Cesium (оставляем undefined для бесплатных источников)
-Cesium.Ion.defaultAccessToken = undefined
+// ========== ПРЕЗАГРУЗКА МОДЕЛЕЙ ==========
+useGLTF.preload('/models/z1_base.glb')
+useGLTF.preload('/models/uslab_laboratory.glb')
+useGLTF.preload('/models/solar_panel_power.glb')
+useGLTF.preload('/models/airlock_hub.glb')
+useGLTF.preload('/models/fgb_base.glb')
+useGLTF.preload('/models/columbus_laboratory.glb')
 
-function App() {
-  const viewerContainerRef = useRef(null)
-  const viewerRef = useRef(null)
-  const [viewerInitialized, setViewerInitialized] = useState(false)
+// ========== КОМПОНЕНТ ЗЕМЛИ ==========
+function Earth() {
+  const earthRef = useRef()
   
-  // Параметры орбиты
-  const [orbitHeight, setOrbitHeight] = useState(408)
-  const [inclination, setInclination] = useState(51.6)
-  const [orientation, setOrientation] = useState({ x: 0, y: 0, z: 0 })
-  
-  // Модули станции
-  const [modules, setModules] = useState([
-    { id: 1, name: 'Zarya', nameRu: 'Заря', type: 'base', attached: true, visible: true, position: { x: 0, y: 0, z: 0 } },
-    { id: 2, name: 'Zvezda', nameRu: 'Звезда', type: 'service', attached: true, visible: true, position: { x: 0, y: 0, z: 20 } },
-    { id: 3, name: 'Nauka', nameRu: 'Наука', type: 'laboratory', attached: true, visible: true, position: { x: 0, y: 0, z: -20 } }
-  ])
-  
-  // Состояния стыковки
-  const [isDocking, setIsDocking] = useState(false)
-  const [dockingProgress, setDockingProgress] = useState(0)
-  const [dockingModule, setDockingModule] = useState(null)
-  
-  // Позиция МКС
-  const [issPosition, setIssPosition] = useState(null)
-  const [language, setLanguage] = useState('ru')
-  const [auditLog, setAuditLog] = useState([])
-  const [showOrbitPath, setShowOrbitPath] = useState(true)
-  const [nextModuleId, setNextModuleId] = useState(4)
-  const [aiPrediction, setAiPrediction] = useState(null)
-  const [error, setError] = useState(null)
-  
-  // Ссылки на сущности Cesium
-  const issEntityRef = useRef(null)
-  const orbitEntityRef = useRef(null)
-  const moduleEntitiesRef = useRef([])
-  const dockingModuleEntityRef = useRef(null)
-  const cameraMovingRef = useRef(false)
+  useFrame((state, delta) => {
+    if (earthRef.current) {
+      earthRef.current.rotation.y += delta * 0.02
+    }
+  })
 
-  // Переводы
-  const texts = {
-    ru: {
-      title: 'Цифровой двойник МКС/РОСС',
-      subtitle: 'Interactive Space Station Digital Twin',
-      orbitHeight: 'Высота орбиты (км)',
-      inclination: 'Наклонение орбиты (°)',
-      orientation: 'Ориентация станции',
-      dock: 'Пристыковать модуль',
-      modules: 'Модули станции',
-      position: 'Позиция МКС',
-      language: 'EN',
-      showOrbit: 'Показать орбиту',
-      auditLog: 'Журнал аудита',
-      aiPrediction: 'AI Прогноз (1ч)',
-      docking: 'Стыковка...',
-      latitude: 'Широта',
-      longitude: 'Долгота',
-      altitude: 'Высота',
-      velocity: 'Скорость',
-      verify: 'Проверить целостность'
-    },
-    en: {
-      title: 'ISS/ROSS Digital Twin',
-      subtitle: 'Interactive Space Station Digital Twin',
-      orbitHeight: 'Orbit Height (km)',
-      inclination: 'Orbit Inclination (°)',
-      orientation: 'Station Orientation',
-      dock: 'Dock Module',
-      modules: 'Station Modules',
-      position: 'ISS Position',
-      language: 'RU',
-      showOrbit: 'Show Orbit',
-      auditLog: 'Audit Log',
-      aiPrediction: 'AI Prediction (1h)',
-      docking: 'Docking...',
-      latitude: 'Latitude',
-      longitude: 'Longitude',
-      altitude: 'Altitude',
-      velocity: 'Velocity',
-      verify: 'Verify Integrity'
+  return (
+    <group ref={earthRef}>
+      <mesh>
+        <sphereGeometry args={[5, 64, 64]} />
+        <meshStandardMaterial color="#1a4d8f" roughness={0.8} metalness={0.2} />
+      </mesh>
+      <mesh scale={[1.02, 1.02, 1.02]}>
+        <sphereGeometry args={[5, 64, 64]} />
+        <meshStandardMaterial color="#4a9eff" transparent opacity={0.3} roughness={0.5} />
+      </mesh>
+    </group>
+  )
+}
+
+// ========== КОМПОНЕНТ МОДУЛЯ ==========
+function StationModule({ module, position, onClick, language }) {
+  const [hovered, setHovered] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+
+  if (!module || !module.type) {
+    return null
+  }
+
+  const modelPaths = {
+    'base': '/models/z1_base.glb',
+    'laboratory': '/models/uslab_laboratory.glb',
+    'power': '/models/solar_panel_power.glb',
+    'hub': '/models/airlock_hub.glb',
+    'service': '/models/fgb_base.glb',
+    'expansion': '/models/columbus_laboratory.glb',
+    'docking': '/models/pma1_docking.glb'
+  }
+
+  const modelPath = modelPaths[module.type] || '/models/z1_base.glb'
+
+  let model = null
+  try {
+    const { scene } = useGLTF(modelPath)
+    model = scene
+  } catch (error) {
+    if (!loadError) {
+      console.warn(`Failed to load ${modelPath}:`, error)
+      setLoadError(true)
     }
   }
 
-  const t = texts[language]
+  const handleClick = useCallback(() => {
+    if (onClick) onClick(module)
+  }, [onClick, module])
 
-  // Создание записи аудита
+  // Fallback геометрия если модель не загрузилась
+  if (loadError || !model) {
+    const colors = {
+      base: '#4a6a8a',
+      laboratory: '#5a7a9a',
+      power: '#2a2a4a',
+      hub: '#6a8aaa',
+      service: '#3a5a7a',
+      expansion: '#4a5a7a',
+      docking: '#5a6a8a'
+    }
+    const color = colors[module.type] || '#4a6a8a'
+
+    return (
+      <group position={position} onClick={handleClick} onPointerOver={() => setHovered(true)} onPointerOut={() => setHovered(false)}>
+        {module.type === 'power' ? (
+          <mesh>
+            <boxGeometry args={[4, 0.1, 2]} />
+            <meshStandardMaterial color={color} metalness={0.8} roughness={0.2} />
+          </mesh>
+        ) : (
+          <mesh>
+            <cylinderGeometry args={[1, 1, 3, 16]} />
+            <meshStandardMaterial color={color} metalness={0.7} roughness={0.3} />
+          </mesh>
+        )}
+        {hovered && (
+          <Html distanceFactor={15}>
+            <div style={{ background: 'rgba(0,0,0,0.9)', color: '#00d4ff', padding: '8px 12px', border: '1px solid #00d4ff', fontFamily: 'Segoe UI, sans-serif', fontSize: '12px', borderRadius: '4px' }}>
+              {language === 'ru' ? module.nameRu : module.name}
+            </div>
+          </Html>
+        )}
+      </group>
+    )
+  }
+
+  return (
+    <group position={position} onClick={handleClick} onPointerOver={() => setHovered(true)} onPointerOut={() => setHovered(false)}>
+      <primitive object={model.clone()} scale={0.3} />
+      {hovered && (
+        <Html distanceFactor={15}>
+          <div style={{ background: 'rgba(0,0,0,0.9)', color: '#00d4ff', padding: '8px 12px', border: '1px solid #00d4ff', fontFamily: 'Segoe UI, sans-serif', fontSize: '12px', borderRadius: '4px' }}>
+            {language === 'ru' ? module.nameRu : module.name}
+          </div>
+        </Html>
+      )}
+    </group>
+  )
+}
+
+// ========== 3D СЦЕНА ==========
+function Scene({ modules, orientation, onModuleClick, language }) {
+  const stationRef = useRef()
+  
+  useFrame((state, delta) => {
+    if (stationRef.current) {
+      stationRef.current.rotation.x = THREE.MathUtils.lerp(stationRef.current.rotation.x, orientation.x * Math.PI / 180, delta * 2)
+      stationRef.current.rotation.y = THREE.MathUtils.lerp(stationRef.current.rotation.y, orientation.y * Math.PI / 180, delta * 2)
+    }
+  })
+
+  const visibleModules = modules.filter(m => m && m.visible && m.attached)
+
+  return (
+    <>
+      <ambientLight intensity={0.5} />
+      <pointLight position={[10, 10, 10]} intensity={1} />
+      <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+      <Earth />
+      <group position={[0, 0, 25]} ref={stationRef}>
+        {visibleModules.map((module, index) => {
+          const x = module.position?.x || 0
+          const y = module.position?.y || 0
+          const z = module.position?.z || (index * 8 - visibleModules.length * 4)
+          return (
+            <StationModule 
+              key={module.id} 
+              module={module} 
+              position={[x, y, z]} 
+              onClick={onModuleClick}
+              language={language}
+            />
+          )
+        })}
+      </group>
+      <OrbitControls enablePan={true} enableZoom={true} enableRotate={true} minDistance={10} maxDistance={100} />
+    </>
+  )
+}
+
+// ========== ОСНОВНОЙ КОМПОНЕНТ ==========
+function App() {
+  const [orbitHeight, setOrbitHeight] = useState(420)
+  const [inclination, setInclination] = useState(51.6)
+  const [orientation, setOrientation] = useState({ x: 0, y: 0, z: 0 })
+  const [panelAngle, setPanelAngle] = useState(0)
+  const [language, setLanguage] = useState('ru')
+  const [isDocking, setIsDocking] = useState(false)
+  const [auditLog, setAuditLog] = useState([])
+  
+  const [modules, setModules] = useState([
+    { id: 1, name: 'Laboratory Module', nameRu: 'Лабораторный модуль', type: 'laboratory', attached: true, visible: true, position: { x: 0, y: 0, z: 0 } },
+    { id: 2, name: 'Power Module', nameRu: 'Энергетический модуль', type: 'power', attached: true, visible: true, position: { x: 10, y: 0, z: 0 } },
+    { id: 3, name: 'Habitation Module', nameRu: 'Жилой модуль', type: 'base', attached: true, visible: true, position: { x: 0, y: 0, z: 10 } },
+    { id: 4, name: 'Hub Module', nameRu: 'Узловой модуль', type: 'hub', attached: true, visible: true, position: { x: 0, y: 0, z: -10 } },
+    { id: 5, name: 'Service Module', nameRu: 'Сервисный модуль', type: 'service', attached: true, visible: true, position: { x: 0, y: 8, z: 0 } },
+    { id: 6, name: 'Science Module', nameRu: 'Научный модуль', type: 'laboratory', attached: false, visible: false, position: { x: -10, y: 0, z: 0 } },
+    { id: 7, name: 'Cargo Module', nameRu: 'Грузовой модуль', type: 'expansion', attached: false, visible: false, position: { x: 0, y: -8, z: 0 } },
+    { id: 8, name: 'Airlock Module', nameRu: 'Шлюзовой модуль', type: 'hub', attached: false, visible: false, position: { x: 8, y: 0, z: 8 } },
+    { id: 9, name: 'Solar Panel 1', nameRu: 'Солнечная панель 1', type: 'power', attached: true, visible: true, position: { x: 12, y: 0, z: 5 } },
+    { id: 10, name: 'Solar Panel 2', nameRu: 'Солнечная панель 2', type: 'power', attached: true, visible: true, position: { x: 12, y: 0, z: -5 } }
+  ])
+
   const createAuditLog = useCallback((action, params) => {
     const record = {
       timestamp: new Date().toISOString(),
       action,
       params,
-      prevHash: auditLog.length > 0 ? auditLog[auditLog.length - 1].hash : 'genesis'
+      hash: Math.random().toString(36).substring(2, 15)
     }
-    const recordString = JSON.stringify(record)
-    let hash = 0
-    for (let i = 0; i < recordString.length; i++) {
-      const char = recordString.charCodeAt(i)
-      hash = ((hash << 5) - hash) + char
-      hash = hash & hash
-    }
-    record.hash = Math.abs(hash).toString(16).padStart(64, '0')
-    setAuditLog(prev => [...prev, record])
-    return record
-  }, [auditLog])
+    setAuditLog(prev => [...prev.slice(-4), record])
+  }, [])
 
-  // Получение позиции МКС
-  useEffect(() => {
-    const fetchPosition = async () => {
-      try {
-        const response = await fetch('http://localhost:8000/api/station/position')
-        if (!response.ok) throw new Error('Backend error')
-        const data = await response.json()
-        setIssPosition(data)
-        
-        try {
-          const predResponse = await fetch('http://localhost:8000/api/predict?hours=1')
-          if (predResponse.ok) {
-            const predData = await predResponse.json()
-            setAiPrediction(predData)
-          }
-        } catch (e) {
-          console.log('Prediction not available')
-        }
-      } catch (error) {
-        setIssPosition(prev => ({
-          latitude: 51.6462,
-          longitude: ((prev?.longitude || 0) + 0.1) % 360 - 180,
-          altitude_km: orbitHeight,
-          velocity_kmh: 27600
-        }))
-      }
-    }
-
-    fetchPosition()
-    const interval = setInterval(fetchPosition, 5000)
-    return () => clearInterval(interval)
-  }, [orbitHeight])
-
-  // Инициализация Cesium Viewer
-  useEffect(() => {
-    if (!viewerContainerRef.current || viewerInitialized) return
-
-    const initViewer = () => {
-      if (!viewerContainerRef.current) return
-
-      const rect = viewerContainerRef.current.getBoundingClientRect()
-      
-      if (rect.width === 0 || rect.height === 0) {
-        setTimeout(initViewer, 100)
-        return
-      }
-
-      try {
-        // Создаем Viewer с минимальной конфигурацией
-        const viewer = new Cesium.Viewer(viewerContainerRef.current, {
-          animation: false,
-          baseLayerPicker: false,
-          fullscreenButton: false,
-          vrButton: false,
-          geocoder: false,
-          homeButton: true,
-          infoBox: false,
-          sceneModePicker: false,
-          selectionIndicator: false,
-          timeline: false,
-          navigationHelpButton: false,
-          navigationInstructionsInitiallyVisible: false,
-          scene3DOnly: true,
-          shouldAnimate: true,
-          shadows: false,
-          terrainProvider: undefined,
-          requestRenderMode: true,
-          maximumRenderTimeChange: Infinity,
-          // Отключаем проблемные компоненты
-          skyBox: new Cesium.SkyBox({
-            sources: {
-              positiveX: 'https://cesium.com/public/SandcastleSampleData/skybox_px.jpg',
-              negativeX: 'https://cesium.com/public/SandcastleSampleData/skybox_nx.jpg',
-              positiveY: 'https://cesium.com/public/SandcastleSampleData/skybox_py.jpg',
-              negativeY: 'https://cesium.com/public/SandcastleSampleData/skybox_ny.jpg',
-              positiveZ: 'https://cesium.com/public/SandcastleSampleData/skybox_pz.jpg',
-              negativeZ: 'https://cesium.com/public/SandcastleSampleData/skybox_nz.jpg'
-            }
-          }),
-          skyAtmosphere: true,
-          sun: true,
-          moon: true,
-          creditContainer: document.createElement('div')
-        })
-
-        // Убираем кредит Cesium
-        viewer.cesiumWidget.creditContainer.style.display = 'none'
-
-        // Настраиваем размер canvas
-        viewer.canvas.style.width = '100%'
-        viewer.canvas.style.height = '100%'
-        
-        // Принудительный resize
-        setTimeout(() => {
-          viewer.resize()
-        }, 200)
-
-        viewerRef.current = viewer
-        setViewerInitialized(true)
-
-        // Устанавливаем начальную камеру
-        viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(0, 0, 20000000),
-          orientation: {
-            heading: Cesium.Math.toRadians(0),
-            pitch: Cesium.Math.toRadians(-90),
-            roll: 0
-          }
-        })
-
-      } catch (error) {
-        console.error('Cesium initialization error:', error)
-        setError(error.message)
-      }
-    }
-
-    // Запускаем инициализацию с задержкой
-    setTimeout(initViewer, 300)
-
-    // Cleanup
-    return () => {
-      if (viewerRef.current) {
-        try {
-          viewerRef.current.destroy()
-        } catch (e) {
-          console.error('Error destroying viewer:', e)
-        }
-        viewerRef.current = null
-        setViewerInitialized(false)
-      }
-    }
-  }, [viewerInitialized])
-
-  // Обновление позиции МКС и орбиты
-  useEffect(() => {
-    if (!viewerRef.current || !issPosition || !viewerInitialized) return
-    const viewer = viewerRef.current
-
-    if (!issPosition.latitude || !issPosition.longitude || !issPosition.altitude_km) {
-      return
-    }
-
-    const position = Cesium.Cartesian3.fromDegrees(
-      issPosition.longitude,
-      issPosition.latitude,
-      issPosition.altitude_km * 1000
-    )
-
-    // Удаляем старую сущность МКС
-    if (issEntityRef.current) {
-      viewer.entities.remove(issEntityRef.current)
-      issEntityRef.current = null
-    }
-
-    try {
-      // Добавляем МКС как точку
-      issEntityRef.current = viewer.entities.add({
-        position: position,
-        point: {
-          pixelSize: 20,
-          color: Cesium.Color.RED,
-          outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 3
-        },
-        label: {
-          text: 'ISS/ROSS',
-          font: 'bold 16px Orbitron, sans-serif',
-          fillColor: Cesium.Color.WHITE,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 3,
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -30)
-        }
-      })
-
-      // Обновляем орбитальную траекторию
-      if (showOrbitPath) {
-        if (orbitEntityRef.current) {
-          viewer.entities.remove(orbitEntityRef.current)
-        }
-
-        const orbitPoints = []
-        const steps = 100
-        for (let i = 0; i <= steps; i++) {
-          const lon = (i / steps) * 360 - 180
-          const lat = Math.sin((i / steps) * Math.PI * 2) * (inclination / 90) * 51.6
-          orbitPoints.push(Cesium.Cartesian3.fromDegrees(lon, lat, orbitHeight * 1000))
-        }
-
-        orbitEntityRef.current = viewer.entities.add({
-          polyline: {
-            positions: orbitPoints,
-            width: 3,
-            material: Cesium.Color.CYAN.withAlpha(0.6)
-          }
-        })
-      }
-
-      // Фокусируем камеру на МКС (только один раз)
-      if (issEntityRef.current && !cameraMovingRef.current) {
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(
-            issPosition.longitude,
-            issPosition.latitude,
-            issPosition.altitude_km * 1000 + 50000
-          ),
-          duration: 2
-        })
-        cameraMovingRef.current = true
-      }
-
-    } catch (error) {
-      console.error('Error adding entities:', error)
-    }
-  }, [issPosition, showOrbitPath, inclination, orbitHeight, viewerInitialized])
-
-  // Обновление модулей станции
-  useEffect(() => {
-    if (!viewerRef.current || !issPosition || !viewerInitialized) return
-    const viewer = viewerRef.current
-
-    // Удаляем старые сущности модулей
-    moduleEntitiesRef.current.forEach(entity => {
-      if (viewer.entities.contains(entity)) {
-        viewer.entities.remove(entity)
-      }
-    })
-    moduleEntitiesRef.current = []
-
-    // Добавляем новые модули
-    modules.forEach((module, index) => {
-      if (!module.visible || !module.attached) return
-
-      const modulePosition = Cesium.Cartesian3.fromDegrees(
-        issPosition.longitude,
-        issPosition.latitude,
-        issPosition.altitude_km * 1000
-      )
-
-      // Смещаем каждый модуль вдоль оси станции
-      const offset = Cesium.Cartesian3.multiplyByScalar(
-        Cesium.Cartesian3.normalize(modulePosition, new Cesium.Cartesian3()),
-        module.position.z * 100,
-        new Cesium.Cartesian3()
-      )
-
-      const entity = viewer.entities.add({
-        position: Cesium.Cartesian3.add(modulePosition, offset, new Cesium.Cartesian3()),
-        box: {
-          dimensions: new Cesium.Cartesian3(10, 10, 20),
-          material: module.type === 'base' ? Cesium.Color.BLUE : 
-                    module.type === 'service' ? Cesium.Color.RED : 
-                    Cesium.Color.GREEN,
-          outline: true,
-          outlineColor: Cesium.Color.WHITE
-        },
-        label: {
-          text: language === 'ru' ? module.nameRu : module.name,
-          font: 'bold 12px Orbitron, sans-serif',
-          fillColor: Cesium.Color.WHITE,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2,
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -20)
-        }
-      })
-
-      moduleEntitiesRef.current.push(entity)
-    })
-  }, [modules, issPosition, orientation, language, viewerInitialized])
-
-  // Обработка стыковки
-  const handleDock = async () => {
+  const handleDock = () => {
     if (isDocking) return
     setIsDocking(true)
-    setDockingProgress(0)
-
-    const intentValid = orbitHeight > 400 && orbitHeight < 2000
-    if (!intentValid) {
-      createAuditLog('dock_rejected', { reason: 'unsafe_orbit', height: orbitHeight })
-      alert('Docking rejected: Unsafe orbit height')
-      setIsDocking(false)
-      return
-    }
-
-    createAuditLog('dock_initiated', { module_id: nextModuleId })
-
-    // Создаем новый модуль для стыковки
-    const newModule = {
-      id: nextModuleId,
-      name: `Module-${nextModuleId}`,
-      nameRu: `Модуль-${nextModuleId}`,
-      type: 'expansion',
-      attached: false,
-      visible: true,
-      position: { x: 0, y: 0, z: 50 }
-    }
-    setDockingModule(newModule)
-
-    // Запускаем 3D анимацию стыковки
-    if (viewerRef.current && issPosition) {
-      const viewer = viewerRef.current
-      const startPos = Cesium.Cartesian3.fromDegrees(
-        issPosition.longitude,
-        issPosition.latitude,
-        issPosition.altitude_km * 1000 + 10000
-      )
-      const endPos = Cesium.Cartesian3.fromDegrees(
-        issPosition.longitude,
-        issPosition.latitude,
-        issPosition.altitude_km * 1000
-      )
-
-      dockingModuleEntityRef.current = viewer.entities.add({
-        position: startPos,
-        box: {
-          dimensions: new Cesium.Cartesian3(10, 10, 20),
-          material: Cesium.Color.ORANGE,
-          outline: true,
-          outlineColor: Cesium.Color.WHITE
-        },
-        label: {
-          text: 'Docking...',
-          font: 'bold 12px Orbitron, sans-serif',
-          fillColor: Cesium.Color.WHITE,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2,
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -20)
-        }
-      })
-
-      // Анимация приближения модуля
-      let progress = 0
-      const animateDock = () => {
-        progress += 0.5
-        setDockingProgress(Math.min(progress, 100))
-
-        if (progress < 100 && dockingModuleEntityRef.current) {
-          const t = progress / 100
-          const currentPos = Cesium.Cartesian3.lerp(startPos, endPos, t, new Cesium.Cartesian3())
-          dockingModuleEntityRef.current.position = currentPos
-          requestAnimationFrame(animateDock)
-        } else {
-          completeDocking()
-        }
-      }
-
-      requestAnimationFrame(animateDock)
-    } else {
-      // Fallback без 3D
-      const dockInterval = setInterval(() => {
-        setDockingProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(dockInterval)
-            completeDocking()
-            return 100
-          }
-          return prev + 2
-        })
-      }, 50)
-    }
-  }
-
-  // Завершение стыковки
-  const completeDocking = async () => {
-    const newModule = {
-      id: nextModuleId,
-      name: `Module-${nextModuleId}`,
-      nameRu: `Модуль-${nextModuleId}`,
-      type: 'expansion',
-      attached: true,
-      visible: true,
-      position: { x: 0, y: 0, z: modules.length * 20 }
-    }
-    setModules([...modules, newModule])
-    setNextModuleId(nextModuleId + 1)
-
-    // Удаляем сущность стыкующегося модуля
-    if (dockingModuleEntityRef.current && viewerRef.current) {
-      viewerRef.current.entities.remove(dockingModuleEntityRef.current)
-      dockingModuleEntityRef.current = null
-    }
-    setDockingModule(null)
-
-    try {
-      await fetch('http://localhost:8000/api/station/dock?module_name=NewModule', {
-        method: 'POST'
-      })
-    } catch (error) {
-      console.error('Docking error:', error)
-    }
-
-    createAuditLog('dock_completed', { module_id: nextModuleId })
-
+    createAuditLog('dock_started', {})
+    
     setTimeout(() => {
-      setIsDocking(false)
-      setDockingProgress(0)
-    }, 1000)
-  }
-
-  // Переключение языка
-  const toggleLanguage = () => {
-    setLanguage(language === 'ru' ? 'en' : 'ru')
-    createAuditLog('language_changed', { from: language, to: language === 'ru' ? 'en' : 'ru' })
-  }
-
-  // Проверка целостности аудита
-  const verifyIntegrity = () => {
-    let valid = true
-    for (let i = 1; i < auditLog.length; i++) {
-      if (auditLog[i].prevHash !== auditLog[i-1].hash) {
-        valid = false
-        break
+      const availableModule = modules.find(m => !m.attached)
+      if (availableModule) {
+        setModules(prev => prev.map(m => 
+          m.id === availableModule.id ? { ...m, attached: true, visible: true } : m
+        ))
+        createAuditLog('dock_completed', { module: availableModule.name })
       }
-    }
-    alert(valid ? 'Audit chain verified ✓' : 'Audit chain corrupted!')
+      setIsDocking(false)
+    }, 2000)
   }
 
-  // Безопасное форматирование чисел
-  const safeFixed = (num, digits = 2) => {
-    if (num === undefined || num === null || isNaN(num)) return 'N/A'
-    return Number(num).toFixed(digits)
+  const toggleModule = (id) => {
+    setModules(prev => prev.map(m => 
+      m.id === id ? { ...m, visible: !m.visible } : m
+    ))
   }
+
+  const toggleLanguage = () => {
+    setLanguage(prev => prev === 'ru' ? 'en' : 'ru')
+  }
+
+  const t = {
+    ru: {
+      parameters: 'ПАРАМЕТРЫ',
+      orbitHeight: 'Высота орбиты',
+      orientation: 'Ориентация',
+      inclination: 'Наклонение',
+      panelAngle: 'Угол панелей',
+      modules: 'МОДУЛИ СТАНЦИИ',
+      addModule: 'ДОБАВИТЬ МОДУЛЬ',
+      save: 'СОХРАНИТЬ',
+      docking: 'СТЫКОВКА',
+      ready: 'Готов к стыковке',
+      upload: 'ЗАГРУЗИТЬ МОДЕЛЬ СТАНЦИИ (GLB/GLTF/OBJ)',
+      language: 'ENGLISH'
+    },
+    en: {
+      parameters: 'PARAMETERS',
+      orbitHeight: 'Orbit Height',
+      orientation: 'Orientation',
+      inclination: 'Inclination',
+      panelAngle: 'Panel Angle',
+      modules: 'STATION MODULES',
+      addModule: 'ADD MODULE',
+      save: 'SAVE',
+      docking: 'DOCKING',
+      ready: 'Ready for docking',
+      upload: 'UPLOAD STATION MODEL (GLB/GLTF/OBJ)',
+      language: 'РУССКИЙ'
+    }
+  }
+
+  const texts = t[language]
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="header-left">
-          <h1>{t.title}</h1>
-          <p className="subtitle">{t.subtitle}</p>
+    <div className="app-container">
+      {/* ЛЕВАЯ ПАНЕЛЬ - ПАРАМЕТРЫ */}
+      <div className="panel left-panel">
+        <div className="panel-header">
+          <span className="panel-icon">⚙</span>
+          <span className="panel-title">{texts.parameters}</span>
         </div>
-        <div className="header-right">
-          <button onClick={toggleLanguage} className="lang-btn">
-            <span style={{ marginRight: '0.5rem' }}>{language === 'ru' ? '🌐' : '🌍'}</span>
-            {t.language}
-          </button>
-          <button onClick={verifyIntegrity} className="verify-btn" title={t.verify}>
-            🔐
-          </button>
-        </div>
-      </header>
-
-      <div className="main-container">
-        <div className="sidebar">
-          <div className="control-group">
-            <h3>
-              <span style={{ color: '#00d4ff', marginRight: '0.5rem' }}>🌍</span>
-              {t.orbitHeight}
-            </h3>
-            <div className="slider-container">
-              <input
-                type="range"
-                min="400"
-                max="2000"
-                value={orbitHeight}
-                onChange={(e) => {
-                  const val = Number(e.target.value)
-                  setOrbitHeight(val)
-                  createAuditLog('orbit_changed', { height: val })
-                }}
-              />
-              <span className="slider-value">{orbitHeight} км</span>
-            </div>
+        
+        <div className="control-group">
+          <div className="control-label">
+            <span className="label-icon">🛰</span>
+            <span>{texts.orbitHeight}</span>
+            <span className="label-value">{orbitHeight} км</span>
           </div>
-
-          <div className="control-group">
-            <h3>
-              <span style={{ color: '#00d4ff', marginRight: '0.5rem' }}>🔺</span>
-              {t.inclination}
-            </h3>
-            <div className="slider-container">
-              <input
-                type="range"
-                min="0"
-                max="90"
-                value={inclination}
-                onChange={(e) => {
-                  const val = Number(e.target.value)
-                  setInclination(val)
-                  createAuditLog('inclination_changed', { value: val })
-                }}
-              />
-              <span className="slider-value">{inclination}°</span>
-            </div>
-          </div>
-
-          <div className="control-group">
-            <h3>
-              <span style={{ color: '#00d4ff', marginRight: '0.5rem' }}>🧭</span>
-              {t.orientation}
-            </h3>
-            <div className="orientation-controls">
-              <div className="slider-row">
-                <label>X</label>
-                <input 
-                  type="range" 
-                  min="-180" 
-                  max="180" 
-                  value={orientation.x}
-                  onChange={(e) => {
-                    const val = Number(e.target.value)
-                    setOrientation({...orientation, x: val})
-                    createAuditLog('orientation_changed', { axis: 'x', value: val })
-                  }}
-                />
-                <span>{orientation.x}°</span>
-              </div>
-              <div className="slider-row">
-                <label>Y</label>
-                <input 
-                  type="range" 
-                  min="0" 
-                  max="360" 
-                  value={orientation.y}
-                  onChange={(e) => {
-                    const val = Number(e.target.value)
-                    setOrientation({...orientation, y: val})
-                    createAuditLog('orientation_changed', { axis: 'y', value: val })
-                  }}
-                />
-                <span>{orientation.y}°</span>
-              </div>
-              <div className="slider-row">
-                <label>Z</label>
-                <input 
-                  type="range" 
-                  min="-180" 
-                  max="180" 
-                  value={orientation.z}
-                  onChange={(e) => {
-                    const val = Number(e.target.value)
-                    setOrientation({...orientation, z: val})
-                    createAuditLog('orientation_changed', { axis: 'z', value: val })
-                  }}
-                />
-                <span>{orientation.z}°</span>
-              </div>
-            </div>
-          </div>
-
-          <button onClick={handleDock} className="dock-btn" disabled={isDocking}>
-            {isDocking ? `${t.docking} ${dockingProgress}%` : t.dock}
-          </button>
-
-          {isDocking && (
-            <div className="docking-progress">
-              <div className="progress-bar" style={{ width: `${dockingProgress}%` }}></div>
-            </div>
-          )}
-
-          <div className="control-group">
-            <h3>
-              <span style={{ color: '#00d4ff', marginRight: '0.5rem' }}>📦</span>
-              {t.modules} ({modules.length})
-            </h3>
-            <div className="modules-list">
-              {modules.map(mod => (
-                <label key={mod.id} className="module-toggle">
-                  <input
-                    type="checkbox"
-                    checked={mod.visible}
-                    onChange={() => {
-                      const newModules = modules.map(m => 
-                        m.id === mod.id ? {...m, visible: !m.visible} : m
-                      )
-                      setModules(newModules)
-                      createAuditLog('module_visibility', { id: mod.id, visible: !mod.visible })
-                    }}
-                  />
-                  <span className="module-name">{language === 'ru' ? mod.nameRu : mod.name}</span>
-                  <span className="module-type">({mod.type})</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="control-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={showOrbitPath}
-                onChange={(e) => {
-                  const val = e.target.checked
-                  setShowOrbitPath(val)
-                  createAuditLog('orbit_visibility', { show: val })
-                }}
-              />
-              {t.showOrbit}
-            </label>
-          </div>
-
-          {issPosition && (
-            <div className="position-info">
-              <h3>
-                <span style={{ color: '#00ff88', marginRight: '0.5rem' }}>📍</span>
-                {t.position}
-              </h3>
-              <div className="position-grid">
-                <div className="position-item">
-                  <span className="label">{t.latitude}: </span>
-                  <span className="value">{safeFixed(issPosition.latitude, 4)}°</span>
-                </div>
-                <div className="position-item">
-                  <span className="label">{t.longitude}: </span>
-                  <span className="value">{safeFixed(issPosition.longitude, 4)}°</span>
-                </div>
-                <div className="position-item">
-                  <span className="label">{t.altitude}: </span>
-                  <span className="value">{safeFixed(issPosition.altitude_km, 2)} км</span>
-                </div>
-                <div className="position-item">
-                  <span className="label">{t.velocity}: </span>
-                  <span className="value">{safeFixed(issPosition.velocity_kmh / 3600, 2)} км/с</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {aiPrediction && (
-            <div className="ai-prediction">
-              <h3>
-                <span style={{ color: '#00ff88', marginRight: '0.5rem' }}>🤖</span>
-                {t.aiPrediction}
-              </h3>
-              <div className="position-grid">
-                <div className="position-item">
-                  <span className="label">{t.latitude}: </span>
-                  <span className="value">{safeFixed(aiPrediction.latitude, 4)}°</span>
-                </div>
-                <div className="position-item">
-                  <span className="label">{t.longitude}: </span>
-                  <span className="value">{safeFixed(aiPrediction.longitude, 4)}°</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {auditLog.length > 0 && (
-            <div className="audit-section">
-              <h3>
-                <span style={{ color: '#ffc107', marginRight: '0.5rem' }}>✓</span>
-                {t.auditLog} ({auditLog.length})
-              </h3>
-              <div className="audit-list">
-                {auditLog.slice(-5).map((log, idx) => (
-                  <div key={idx} className="audit-item">
-                    <span className="audit-time">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                    <span className="audit-action">{log.action}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <div className="error-message">
-              <h3>
-                <span style={{ color: '#ff006e', marginRight: '0.5rem' }}>⚠</span>
-                Ошибка
-              </h3>
-              <p>{error}</p>
-            </div>
-          )}
+          <input
+            type="range"
+            min="400"
+            max="2000"
+            value={orbitHeight}
+            onChange={(e) => {
+              setOrbitHeight(Number(e.target.value))
+              createAuditLog('orbit_changed', { height: orbitHeight })
+            }}
+            className="slider"
+          />
         </div>
 
-        <div 
-          ref={viewerContainerRef} 
-          className="cesium-viewer"
-          style={{ width: '100%', height: '100%', display: 'block' }}
-        />
+        <div className="control-group">
+          <div className="control-label">
+            <span className="label-icon">🔄</span>
+            <span>{texts.orientation}</span>
+            <span className="label-value">{orientation.y}°</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="360"
+            value={orientation.y}
+            onChange={(e) => {
+              setOrientation({...orientation, y: Number(e.target.value)})
+              createAuditLog('orientation_changed', { angle: orientation.y })
+            }}
+            className="slider"
+          />
+        </div>
+
+        <div className="control-group">
+          <div className="control-label">
+            <span className="label-icon">📐</span>
+            <span>{texts.inclination}</span>
+            <span className="label-value">{inclination}°</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="90"
+            step="0.1"
+            value={inclination}
+            onChange={(e) => {
+              setInclination(Number(e.target.value))
+              createAuditLog('inclination_changed', { value: inclination })
+            }}
+            className="slider"
+          />
+        </div>
+
+        <div className="control-group">
+          <div className="control-label">
+            <span className="label-icon">☀</span>
+            <span>{texts.panelAngle}</span>
+            <span className="label-value">{panelAngle}°</span>
+          </div>
+          <input
+            type="range"
+            min="-180"
+            max="180"
+            value={panelAngle}
+            onChange={(e) => {
+              setPanelAngle(Number(e.target.value))
+              createAuditLog('panel_angle_changed', { angle: panelAngle })
+            }}
+            className="slider"
+          />
+        </div>
+
+        <div className="status-bar">
+          <div className="status-indicator online"></div>
+          <span>API: Подключение...</span>
+        </div>
+      </div>
+
+      {/* ЦЕНТРАЛЬНАЯ 3D СЦЕНА */}
+      <div className="main-view">
+        <div className="language-toggle" onClick={toggleLanguage}>
+          {texts.language}
+        </div>
+        <Suspense fallback={<div className="loading">Загрузка 3D...</div>}>
+          <Canvas camera={{ position: [0, 0, 60], fov: 50 }}>
+            <Scene 
+              modules={modules} 
+              orientation={orientation}
+              onModuleClick={(module) => console.log('Module clicked:', module)}
+              language={language}
+            />
+          </Canvas>
+        </Suspense>
+      </div>
+
+      {/* ПРАВАЯ ПАНЕЛЬ - МОДУЛИ */}
+      <div className="panel right-panel">
+        <div className="panel-header">
+          <span className="panel-icon">🔧</span>
+          <span className="panel-title">{texts.modules}</span>
+        </div>
+
+        <div className="modules-list">
+          {modules.map(module => (
+            <div key={module.id} className={`module-card ${module.attached ? 'attached' : ''} ${module.visible ? 'visible' : ''}`}>
+              <div className="module-icon">
+                {module.type === 'power' ? '⚡' : module.type === 'laboratory' ? '🔬' : '📦'}
+              </div>
+              <div className="module-info">
+                <div className="module-name">{language === 'ru' ? module.nameRu : module.name}</div>
+                <div className="module-status">{module.attached ? 'Подключен' : 'Доступен'}</div>
+              </div>
+              <div className="module-actions">
+                <button className="action-btn" onClick={() => toggleModule(module.id)}>
+                  {module.visible ? '👁' : '👁‍🗨'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="progress-bar-container">
+          <div className="progress-bar" style={{ width: `${(modules.filter(m => m.attached).length / modules.length) * 100}%` }}></div>
+        </div>
+
+        <button className="primary-btn" onClick={() => createAuditLog('add_module_clicked', {})}>
+          + {texts.addModule}
+        </button>
+
+        <div className="button-row">
+          <button className="secondary-btn" onClick={() => createAuditLog('save_clicked', {})}>
+            💾 {texts.save}
+          </button>
+          <button 
+            className={`action-btn-large ${isDocking ? 'docking' : ''}`} 
+            onClick={handleDock}
+            disabled={isDocking}
+          >
+            {isDocking ? '⏳ Стыковка...' : `🔗 ${texts.docking}`}
+          </button>
+        </div>
+
+        <div className="status-message">
+          <span className="status-icon">⚡</span>
+          <span>{texts.ready}</span>
+        </div>
+
+        <button className="upload-btn" onClick={() => createAuditLog('upload_clicked', {})}>
+          📁 {texts.upload}
+        </button>
+
+        <div className="audit-log">
+          {auditLog.map((log, idx) => (
+            <div key={idx} className="log-entry">
+              <span className="log-time">{new Date(log.timestamp).toLocaleTimeString()}</span>
+              <span className="log-action">{log.action}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
