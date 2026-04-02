@@ -28,7 +28,6 @@ Thumbs.db
 *.obj
 *.fbx
 *.gltf
-*.glb
 *.png
 *.jpg
 *.jpeg
