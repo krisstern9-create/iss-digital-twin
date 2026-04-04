@@ -34,6 +34,76 @@ body {
   grid-template-columns: 340px 1fr 420px;
   height: 100vh;
   background: radial-gradient(ellipse at center, #10192d 0%, #070b16 100%);
+  position: relative;
+}
+
+.app-toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  max-width: min(520px, 92vw);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  animation: toast-in 0.28s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.app-toast--info {
+  background: rgba(20, 40, 72, 0.95);
+  color: #e8f0ff;
+  border-color: rgba(110, 161, 255, 0.35);
+}
+
+.app-toast--ok {
+  background: rgba(12, 52, 40, 0.95);
+  color: #c8ffd8;
+  border-color: rgba(48, 231, 140, 0.45);
+}
+
+.app-toast--warn {
+  background: rgba(52, 36, 12, 0.95);
+  color: #ffe8c8;
+  border-color: rgba(255, 179, 79, 0.45);
+}
+
+.app-toast--err {
+  background: rgba(52, 16, 24, 0.95);
+  color: #ffd0d6;
+  border-color: rgba(255, 97, 116, 0.45);
+}
+
+.app-toast-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+  padding: 0 4px;
+}
+
+.app-toast-close:hover {
+  opacity: 1;
 }
 
 /* ========== ПАНЕЛИ ========== */
@@ -194,6 +264,51 @@ body {
   box-shadow: var(--glow-blue);
 }
 
+.main-view-banner {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 110;
+  max-width: min(560px, 90vw);
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.35;
+  pointer-events: none;
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  background: rgba(8, 14, 28, 0.72);
+  color: rgba(232, 238, 248, 0.95);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.main-view-banner--presentation {
+  border-color: rgba(155, 123, 255, 0.45);
+  background: rgba(18, 12, 32, 0.75);
+}
+
+.main-view-banner--training {
+  border-color: rgba(48, 231, 140, 0.4);
+  background: rgba(10, 28, 22, 0.72);
+}
+
+.app-container--presentation .left-panel,
+.app-container--presentation .right-panel {
+  opacity: 0.48;
+  transition: opacity 0.35s ease;
+}
+
+.app-container--presentation .main-view {
+  box-shadow: inset 0 0 80px rgba(120, 90, 200, 0.08);
+}
+
+.app-container--training .left-panel,
+.app-container--training .right-panel {
+  border-color: rgba(48, 231, 140, 0.22);
+}
+
 /* ========== HUD OVERLAY ========== */
 .hud {
   position: absolute;
@@ -271,6 +386,17 @@ body {
 .pill.active {
   background: linear-gradient(135deg, rgba(0, 212, 255, 0.18), rgba(155, 123, 255, 0.14));
   border-color: rgba(0, 212, 255, 0.7);
+}
+
+.pill--demo.active {
+  background: linear-gradient(135deg, rgba(48, 231, 140, 0.22), rgba(0, 212, 255, 0.16));
+  border-color: rgba(48, 231, 140, 0.65);
+  box-shadow: 0 0 20px rgba(48, 231, 140, 0.2);
+}
+
+.pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.88;
 }
 
 /* ========== КАРТОЧКИ МОДУЛЕЙ ========== */
@@ -406,6 +532,14 @@ body {
   box-shadow: 0 6px 30px rgba(100, 150, 255, 0.6);
 }
 
+.primary-btn:disabled,
+.action-btn-large:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .button-row {
   display: grid;
   grid-template-columns: 1fr 1.5fr;
@@ -532,6 +666,25 @@ body {
 
 .log-action {
   color: var(--accent-cyan);
+}
+
+button.log-entry.log-entry--btn {
+  width: 100%;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+button.log-entry.log-entry--btn:hover {
+  background: rgba(100, 150, 255, 0.12);
+}
+
+button.log-entry.log-entry--btn:focus-visible {
+  outline: 2px solid rgba(0, 212, 255, 0.65);
+  outline-offset: 2px;
 }
 
 /* ========== СКРОЛЛБАР ========== */

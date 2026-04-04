@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 import hashlib
 import json
+import logging
 import math
 import sqlite3
 import os
@@ -10,41 +11,50 @@ import base64
 import hmac
 import secrets
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from config import get_settings
+from logging_conf import setup_logging
 from scos_adapter import ScosSecureChannel
+
+logger = logging.getLogger("iss_dt")
 
 # Skyfield с обработкой ошибок
 try:
     from skyfield.api import load, EarthSatellite
     SKYFIELD_AVAILABLE = True
 except ImportError as e:
-    print(f"Skyfield not available: {e}")
+    logger.warning("Skyfield not available: %s", e)
     SKYFIELD_AVAILABLE = False
+
+_SETTINGS = get_settings()
+setup_logging(_SETTINGS.log_level)
 
 # Initialize FastAPI app
 app = FastAPI(
     title="ISS Digital Twin API",
     description="API for ISS/ROSS Digital Twin - Digital Breakthrough 2026",
-    version="1.0.0"
+    version=_SETTINGS.api_version,
 )
 
-# CORS configuration for frontend (restricted to development domain)
+# CORS: список origin из переменной CORS_ORIGINS (через запятую)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=list(_SETTINGS.cors_origins),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Database configuration
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), "digital_twin.db")
 
 @contextmanager
 def get_db_connection():
-    """Context manager for database connections"""
-    conn = sqlite3.connect(DATABASE_PATH)
+    """Контекстное подключение к SQLite с WAL и таймаутом блокировок."""
+    conn = sqlite3.connect(_SETTINGS.database_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
     finally:
@@ -96,34 +106,51 @@ def init_database():
         
         conn.commit()
 
-        # Seed initial modules if table is empty
-        cursor.execute("SELECT COUNT(*) FROM modules")
-        count = cursor.fetchone()[0]
-        if count == 0:
+        # Optional column for 3D segment ↔ STL folder (MVP full ISS)
+        try:
+            cursor.execute("ALTER TABLE modules ADD COLUMN stl_group TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # Reseed when legacy rows have no stl_group (one-time migration to full segment list)
+        cursor.execute("SELECT COUNT(*) FROM modules WHERE stl_group IS NOT NULL")
+        has_segments = cursor.fetchone()[0]
+        if has_segments == 0:
+            cursor.execute("DELETE FROM modules")
+            conn.commit()
             seed_modules = [
-                (1, "Zarya", "Заря", "base", 1, 1, 19323, 0.0, 0.0, 0.0),
-                (2, "Zvezda", "Звезда", "service", 1, 1, 19051, 0.0, 0.0, 10.0),
-                (3, "Nauka", "Наука", "laboratory", 1, 1, 20300, 10.0, 0.0, 0.0),
-                (4, "Prichal", "Причал", "hub", 1, 1, 3665, 0.0, 0.0, -10.0),
-                (5, "Rassvet", "Рассвет", "storage", 1, 1, 5075, 0.0, 8.0, 0.0),
-                (6, "Columbus", "Коламбус", "expansion", 0, 0, 12500, -10.0, 0.0, 0.0),
-                (7, "PMA-1", "ПМА-1", "docking", 0, 0, 1000, 8.0, 0.0, 8.0),
-                (8, "Solar Panel A", "Солнечная панель A", "power", 1, 1, 500, 12.0, 0.0, 5.0),
-                (9, "Solar Panel B", "Солнечная панель B", "power", 1, 1, 500, 12.0, 0.0, -5.0),
-                (10, "Node-2", "Узел-2", "hub", 0, 0, 8000, 0.0, -8.0, 0.0),
+                (1, "JEM", "JEM (Kibo)", "segment", 1, 1, 14300, 8.0, 14.0, 2.0, "JEM"),
+                (2, "MRM1", "МРМ-1 (Пирс)", "segment", 1, 1, 4100, -18.0, 2.0, 4.0, "MRM1"),
+                (3, "MRM2", "МРМ-2 (Поиск)", "segment", 0, 1, 800, -24.0, 0.0, -3.0, "MRM2"),
+                (4, "ELC1", "ELC-1", "segment", 1, 1, 2000, 4.0, 1.0, 9.0, "ELC1"),
+                (5, "ELC2", "ELC-2", "segment", 1, 1, 2000, 2.0, 1.0, 9.0, "ELC2"),
+                (6, "ELC3", "ELC-3", "segment", 1, 1, 2000, 0.0, 1.0, 9.0, "ELC3"),
+                (7, "ELC4", "ELC-4", "segment", 1, 1, 2000, -2.0, 1.0, 9.0, "ELC4"),
+                (8, "P5", "P5", "segment", 1, 1, 4000, -6.0, 0.0, 0.0, "P5"),
+                (9, "P6", "P6", "segment", 1, 1, 5000, 12.0, 0.0, 0.0, "P6"),
+                (10, "S5", "S5", "segment", 1, 1, 4000, -12.0, 0.0, 0.0, "S5"),
+                (11, "S6", "S6 (солнечные)", "segment", 1, 1, 12000, -18.0, 0.0, 0.0, "S6"),
+                (12, "PIRS", "Пирс (стыковочный)", "segment", 1, 1, 3500, -14.0, -2.0, 2.0, "PIRS"),
+                (13, "PMM", "PMM", "segment", 1, 1, 4200, -16.0, 3.0, -2.0, "PMM"),
+                (14, "AMS", "AMS", "segment", 1, 1, 2500, 14.0, 8.0, -4.0, "Ams"),
             ]
             cursor.executemany(
                 """
                 INSERT INTO modules
-                (id, name, name_ru, type, attached, visible, mass_kg, position_x, position_y, position_z)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, name_ru, type, attached, visible, mass_kg, position_x, position_y, position_z, stl_group)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 seed_modules,
             )
             conn.commit()
 
-# Initialize database on startup
-init_database()
+
+@app.on_event("startup")
+def _on_startup():
+    init_database()
+    logger.info("SQLite ready: %s", _SETTINGS.database_path)
+
 
 # Default TLE data for ISS (backup)
 ISS_TLE = {
@@ -159,29 +186,36 @@ def get_tle_data():
     """Load TLE data from Celestrak with database caching"""
     if not SKYFIELD_AVAILABLE:
         return None
-    
+
+    cache_sec = _SETTINGS.tle_cache_seconds
+    timeout = _SETTINGS.tle_request_timeout_sec
+
     try:
         # Check database cache first
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM tle_cache WHERE id = 1")
             row = cursor.fetchone()
-            
+
             if row:
                 updated_at = datetime.fromisoformat(row["updated_at"])
                 age = datetime.now() - updated_at
-                if age.total_seconds() < 3600:  # Cache for 1 hour
+                if age.total_seconds() < cache_sec:
                     return {
                         "name": row["name"],
                         "line1": row["line1"],
-                        "line2": row["line2"]
+                        "line2": row["line2"],
                     }
-        
+
         # Fetch from Celestrak
         url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle"
         import requests
-        response = requests.get(url, timeout=10)
-        lines = response.text.split('\n')
+
+        response = requests.get(url, timeout=timeout)
+        if response.status_code != 200:
+            logger.warning("TLE HTTP %s from Celestrak", response.status_code)
+            return ISS_TLE
+        lines = response.text.split("\n")
         
         for i, line in enumerate(lines):
             if "ISS ZARYA" in line or "1998-067A" in line:
@@ -204,17 +238,24 @@ def get_tle_data():
                 return tle_data
         
         return ISS_TLE  # Fallback to default
-        
+
     except Exception as e:
-        print(f"TLE fetch error: {e}")
+        logger.warning("TLE fetch error: %s", e)
         return ISS_TLE
 
-def get_stations_tle_catalog(max_items: int = 20):
+
+def get_stations_tle_catalog(max_items: Optional[int] = None):
     """Fetch stations TLE catalog for multi-station visualization."""
+    if max_items is None:
+        max_items = _SETTINGS.stations_catalog_max
     try:
         import requests
+
         url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=_SETTINGS.tle_request_timeout_sec)
+        if response.status_code != 200:
+            logger.warning("Stations catalog HTTP %s", response.status_code)
+            return []
         lines = [ln.strip() for ln in response.text.split("\n") if ln.strip()]
         out = []
         for i in range(0, len(lines) - 2, 3):
@@ -226,21 +267,33 @@ def get_stations_tle_catalog(max_items: int = 20):
                 break
         return out
     except Exception as e:
-        print(f"Stations catalog fetch error: {e}")
+        logger.warning("Stations catalog fetch error: %s", e)
         return []
+
+
+_timescale = None
+
+
+def _get_timescale():
+    """Один общий timescale на процесс (Skyfield)."""
+    global _timescale
+    if _timescale is None:
+        _timescale = load.timescale()
+    return _timescale
+
 
 def calculate_position_skyfield():
     """Calculate position using Skyfield library"""
     if not SKYFIELD_AVAILABLE:
         return None
-    
+
     try:
         tle = get_tle_data()
         if not tle:
             return None
-        
-        satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], load.timescale())
-        ts = load.timescale()
+
+        ts = _get_timescale()
+        satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], ts)
         t = ts.now()
         geocentric = satellite.at(t)
         subpoint = geocentric.subpoint()
@@ -252,7 +305,7 @@ def calculate_position_skyfield():
             "velocity_kmh": geocentric.velocity.km_per_s * 3600
         }
     except Exception as e:
-        print(f"Skyfield calculation error: {e}")
+        logger.warning("Skyfield calculation error: %s", e)
         return None
 
 def calculate_position_mock():
@@ -320,6 +373,43 @@ def get_audit_log(limit: int = 50):
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+
+def _verify_audit_chain(audit_chain: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Проверка prev_hash и пересчёт SHA-256 каждой записи."""
+    if not audit_chain:
+        return {"valid": True, "records": 0, "message": "No audit records"}
+
+    for i, record in enumerate(audit_chain[1:], 1):
+        prev_record = audit_chain[i - 1]
+        if record.get("prev_hash") != prev_record["hash"]:
+            return {
+                "valid": False,
+                "error": f"Chain broken at record {i}",
+                "records": len(audit_chain),
+            }
+
+    for i, record in enumerate(audit_chain):
+        try:
+            params_parsed = json.loads(record["params"])
+        except (json.JSONDecodeError, TypeError):
+            params_parsed = {"raw": record["params"]}
+        body = {
+            "timestamp": record["timestamp"],
+            "action": record["action"],
+            "params": params_parsed,
+            "prev_hash": record["prev_hash"],
+        }
+        computed = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        if computed != record["hash"]:
+            return {
+                "valid": False,
+                "error": f"Hash mismatch at index {i} (id={record.get('id')})",
+                "records": len(audit_chain),
+            }
+
+    return {"valid": True, "records": len(audit_chain), "message": "Audit chain verified"}
+
+
 def list_modules_from_db() -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -327,6 +417,11 @@ def list_modules_from_db() -> List[Dict[str, Any]]:
         rows = cursor.fetchall()
         modules: List[Dict[str, Any]] = []
         for row in rows:
+            sg = None
+            try:
+                sg = row["stl_group"]
+            except (KeyError, IndexError):
+                sg = None
             modules.append(
                 {
                     "id": row["id"],
@@ -337,6 +432,7 @@ def list_modules_from_db() -> List[Dict[str, Any]]:
                     "visible": bool(row["visible"]),
                     "mass_kg": row["mass_kg"],
                     "position": {"x": row["position_x"], "y": row["position_y"], "z": row["position_z"]},
+                    "stlGroup": sg,
                 }
             )
         return modules
@@ -379,8 +475,8 @@ def root():
         "message": "ISS Digital Twin API",
         "status": "running",
         "skyfield_available": SKYFIELD_AVAILABLE,
-        "version": "1.0.0",
-        "database": "SQLite initialized"
+        "version": _SETTINGS.api_version,
+        "database": "sqlite+w",
     }
 
 @app.get("/api/station/position")
@@ -400,7 +496,7 @@ def get_position():
         return position
         
     except Exception as e:
-        print(f"Position error: {e}")
+        logger.exception("Position error: %s", e)
         position = calculate_position_mock()
         create_audit_log("get_position", {"source": "fallback", "time": datetime.utcnow().isoformat()})
         return position
@@ -481,19 +577,8 @@ def verify_audit():
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM audit_log ORDER BY id")
         rows = cursor.fetchall()
-        
-        if not rows:
-            return {"valid": True, "records": 0, "message": "No audit records"}
-        
         audit_chain = [dict(row) for row in rows]
-        
-        # Verify hash chain
-        for i, record in enumerate(audit_chain[1:], 1):
-            prev_record = audit_chain[i-1]
-            if record.get("prev_hash") != prev_record["hash"]:
-                return {"valid": False, "error": f"Chain broken at record {i}", "records": len(audit_chain)}
-        
-        return {"valid": True, "records": len(audit_chain), "message": "Audit chain verified"}
+    return _verify_audit_chain(audit_chain)
 
 @app.get("/api/audit/log")
 def get_audit_log_endpoint(limit: int = Query(default=50, ge=1, le=1000)):
@@ -508,8 +593,8 @@ def predict_position(hours: int = Query(default=1, ge=1, le=72)):
         if SKYFIELD_AVAILABLE:
             tle = get_tle_data()
             if tle:
-                satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], load.timescale())
-                ts = load.timescale()
+                ts = _get_timescale()
+                satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], ts)
                 future_t = ts.now() + timedelta(hours=hours)
                 geocentric = satellite.at(future_t)
                 subpoint = geocentric.subpoint()
@@ -523,7 +608,7 @@ def predict_position(hours: int = Query(default=1, ge=1, le=72)):
                     "source": "skyfield"
                 }
     except Exception as e:
-        print(f"Prediction error: {e}")
+        logger.warning("Prediction error: %s", e)
     
     # Fallback prediction
     future_longitude = (base_longitude + hours * 15) % 360
@@ -536,9 +621,11 @@ def predict_position(hours: int = Query(default=1, ge=1, le=72)):
         "source": "mock"
     }
 
-@app.get("/api/predict/track")
-def predict_track(hours: int = Query(default=6, ge=1, le=72), step_min: int = Query(default=30, ge=5, le=120)):
-    """Predict a track for the next N hours as a list (AI/ML bonus section)."""
+def _compute_predict_track_points(hours: int, step_min: int) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Расчёт траектории МКС без записи в audit.
+    Возвращает (points, source) где source — skyfield | mock.
+    """
     now = datetime.utcnow()
     points: List[Dict[str, Any]] = []
 
@@ -546,8 +633,8 @@ def predict_track(hours: int = Query(default=6, ge=1, le=72), step_min: int = Qu
         try:
             tle = get_tle_data()
             if tle:
-                satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], load.timescale())
-                ts = load.timescale()
+                ts = _get_timescale()
+                satellite = EarthSatellite(tle["line1"], tle["line2"], tle["name"], ts)
                 steps = int((hours * 60) / step_min) + 1
                 for i in range(steps):
                     t = ts.from_datetime(now + timedelta(minutes=i * step_min))
@@ -562,15 +649,13 @@ def predict_track(hours: int = Query(default=6, ge=1, le=72), step_min: int = Qu
                             "velocity_kmh": geocentric.velocity.km_per_s * 3600,
                         }
                     )
-                create_audit_log("predict_track", {"source": "skyfield", "hours": hours, "step_min": step_min})
-                return {"source": "skyfield", "hours": hours, "step_min": step_min, "points": points}
+                return points, "skyfield"
         except Exception as e:
-            print(f"Track prediction error: {e}")
+            logger.warning("Track prediction error: %s", e)
 
-    # Fallback: generate points from mock phase increment
     steps = int((hours * 60) / step_min) + 1
     for i in range(steps):
-        phase = (base_longitude + (i * step_min) * 0.25) % 360  # ~15 deg/hour
+        phase = (base_longitude + (i * step_min) * 0.25) % 360
         p = calculate_position_mock_at(phase)
         points.append(
             {
@@ -581,8 +666,122 @@ def predict_track(hours: int = Query(default=6, ge=1, le=72), step_min: int = Qu
                 "velocity_kmh": p["velocity_kmh"],
             }
         )
-    create_audit_log("predict_track", {"source": "mock", "hours": hours, "step_min": step_min})
-    return {"source": "mock", "hours": hours, "step_min": step_min, "points": points}
+    return points, "mock"
+
+
+def _synthesize_iss_ai_forecast(
+    points: List[Dict[str, Any]],
+    source: str,
+    hours: int,
+) -> Dict[str, Any]:
+    """Эвристический «AI»-разбор траектории (без внешнего LLM)."""
+    if not points:
+        return {
+            "summary_ru": "Нет точек траектории для анализа.",
+            "summary_en": "No trajectory points to analyze.",
+            "confidence": 0.0,
+            "model": "orbit-orchestrator-v1",
+            "highlights": {},
+            "factors": ["no_data"],
+        }
+
+    alts = [float(p["altitude_km"]) for p in points]
+    lats = [float(p["latitude"]) for p in points]
+    lons = [float(p["longitude"]) for p in points]
+    vels = [float(p.get("velocity_kmh", 27500.0)) for p in points]
+
+    alt_min, alt_max = min(alts), max(alts)
+    alt_mean = sum(alts) / len(alts)
+    lat_span = max(lats) - min(lats)
+    vel_mean = sum(vels) / len(vels)
+    alt_jitter = alt_max - alt_min
+
+    # грубая оценка «шага» по долготе между соседними точками
+    lon_steps = []
+    for i in range(1, min(len(lons), 25)):
+        d = abs(lons[i] - lons[i - 1])
+        if d > 180:
+            d = 360 - d
+        lon_steps.append(d)
+    lon_step_avg = sum(lon_steps) / len(lon_steps) if lon_steps else 0.0
+
+    confidence = 0.88 if source == "skyfield" else 0.62
+    if alt_jitter > 25:
+        confidence *= 0.92
+    confidence = round(max(0.35, min(0.97, confidence)), 2)
+
+    basis_ru = "текущие TLE и пропагация Skyfield" if source == "skyfield" else "упрощённая демо-модель без свежих TLE"
+    basis_en = "live TLE propagation (Skyfield)" if source == "skyfield" else "simplified demo ephemeris (no fresh TLE)"
+
+    summary_ru = (
+        f"За ближайшие {hours} ч ожидается средняя высота ~{alt_mean:.0f} км "
+        f"(диапазон {alt_min:.0f}–{alt_max:.0f} км), средняя эквивалентная скорость ~{vel_mean:.0f} км/ч. "
+        f"Размах широты по треку ~{abs(lat_span):.1f}°. Основа прогноза: {basis_ru}. "
+        f"Оценка устойчивости высоты: {'высокая' if alt_jitter < 6 else 'умеренная' if alt_jitter < 15 else 'низкая'}."
+    )
+    summary_en = (
+        f"Over the next {hours} h expect mean altitude ~{alt_mean:.0f} km "
+        f"(range {alt_min:.0f}–{alt_max:.0f} km), mean ground-track speed ~{vel_mean:.0f} km/h. "
+        f"Latitude span ~{abs(lat_span):.1f}°. Forecast basis: {basis_en}. "
+        f"Altitude stability: {'high' if alt_jitter < 6 else 'moderate' if alt_jitter < 15 else 'low'}."
+    )
+
+    factors = [
+        "skyfield_sgp4" if source == "skyfield" else "mock_ephemeris",
+        "altitude_stable" if alt_jitter < 8 else "altitude_variable",
+    ]
+    if lon_step_avg > 2:
+        factors.append("rapid_longitude_advance")
+
+    return {
+        "summary_ru": summary_ru,
+        "summary_en": summary_en,
+        "confidence": confidence,
+        "model": "orbit-orchestrator-v1",
+        "highlights": {
+            "altitude_km_min": round(alt_min, 1),
+            "altitude_km_max": round(alt_max, 1),
+            "altitude_km_mean": round(alt_mean, 1),
+            "latitude_range_deg": round(abs(lat_span), 2),
+            "mean_velocity_kmh": round(vel_mean, 0),
+            "orbit_period_min_est": 92.68,
+            "data_source": source,
+            "longitude_step_deg_avg": round(lon_step_avg, 3),
+        },
+        "factors": factors,
+    }
+
+
+@app.get("/api/predict/track")
+def predict_track(hours: int = Query(default=6, ge=1, le=72), step_min: int = Query(default=30, ge=5, le=120)):
+    """Predict a track for the next N hours as a list (AI/ML bonus section)."""
+    points, src = _compute_predict_track_points(hours, step_min)
+    create_audit_log("predict_track", {"source": src, "hours": hours, "step_min": step_min})
+    return {"source": src, "hours": hours, "step_min": step_min, "points": points}
+
+
+@app.get("/api/ai/forecast")
+def ai_iss_forecast(
+    hours: int = Query(default=6, ge=1, le=72),
+    step_min: int = Query(default=30, ge=5, le=120),
+):
+    """
+    Встроенный прогноз МКС с «AI»-интерпретацией траектории.
+    Траектория совпадает с /api/predict/track; добавляется текстовый разбор и метрики.
+    """
+    points, src = _compute_predict_track_points(hours, step_min)
+    ai = _synthesize_iss_ai_forecast(points, src, hours)
+    create_audit_log(
+        "ai_predict_iss",
+        {"source": src, "hours": hours, "step_min": step_min, "confidence": ai["confidence"]},
+    )
+    return {
+        "source": src,
+        "hours": hours,
+        "step_min": step_min,
+        "points": points,
+        "ai": ai,
+    }
 
 @app.get("/api/audit/timeline")
 def audit_timeline(limit: int = Query(default=200, ge=5, le=2000)):
@@ -617,14 +816,13 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dl / 2) ** 2
     return 2 * R * math.asin(math.sqrt(a))
 
-@app.get("/api/stations")
-def list_stations():
-    """Return a list of stations for 'inter-station link' visualization (bonus feature)."""
-    stations = []
+def _build_stations_list() -> List[Dict[str, Any]]:
+    """Данные станций без записи в audit (для внутренних вызовов и /api/stations/link)."""
+    stations: List[Dict[str, Any]] = []
     if SKYFIELD_AVAILABLE:
-        catalog = get_stations_tle_catalog(max_items=8)
+        catalog = get_stations_tle_catalog()
         if catalog:
-            ts = load.timescale()
+            ts = _get_timescale()
             t = ts.now()
             for idx, item in enumerate(catalog):
                 try:
@@ -648,7 +846,6 @@ def list_stations():
                     continue
 
     if not stations:
-        # Fallback primary + alternatives
         iss_pos = calculate_position_skyfield() if SKYFIELD_AVAILABLE else calculate_position_mock()
         ross_pos = calculate_position_mock_at((base_longitude + 70) % 360)
         gateway_pos = calculate_position_mock_at((base_longitude + 150) % 360)
@@ -656,17 +853,31 @@ def list_stations():
         stations = [
             {"id": "iss", "name": "ISS", "nameRu": "МКС", "position": iss_pos, "source": "mock"},
             {"id": "ross", "name": "ROSS", "nameRu": "РОСС", "position": ross_pos, "source": "mock"},
-            {"id": "gateway", "name": "Lunar Gateway", "nameRu": "Лунный Gateway", "position": gateway_pos, "source": "mock"},
+            {
+                "id": "gateway",
+                "name": "Lunar Gateway",
+                "nameRu": "Лунный Gateway",
+                "position": gateway_pos,
+                "source": "mock",
+            },
         ]
 
+    return stations
+
+
+@app.get("/api/stations")
+def list_stations():
+    """Return a list of stations for 'inter-station link' visualization (bonus feature)."""
+    stations = _build_stations_list()
     create_audit_log("list_stations", {"count": len(stations)})
     return {"stations": stations}
+
 
 @app.get("/api/stations/link")
 def station_link(a: str = Query(..., min_length=1), b: str = Query(..., min_length=1)):
     """Compute a simple link metric between two stations (distance + signal delay)."""
-    data = list_stations()
-    stations = {s["id"]: s for s in data["stations"]}
+    stations_list = _build_stations_list()
+    stations = {s["id"]: s for s in stations_list}
     if a not in stations or b not in stations:
         raise HTTPException(status_code=404, detail="Station not found")
 
@@ -764,13 +975,18 @@ def judge_analytics():
     """KPI panel for judges."""
     logs = get_audit_log(500)
     actions = [x.get("action", "") for x in logs]
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM audit_log ORDER BY id")
+        full_chain = [dict(r) for r in cursor.fetchall()]
+    integrity_ok = _verify_audit_chain(full_chain).get("valid", False)
     kpis = {
         "total_events": len(logs),
         "dock_events": sum(1 for a in actions if "dock" in a),
         "expand_events": sum(1 for a in actions if "expand" in a),
         "secure_events": sum(1 for a in actions if "secure_" in a or "scos_" in a),
         "predict_events": sum(1 for a in actions if "predict" in a),
-        "integrity_ok": verify_audit().get("valid", False),
+        "integrity_ok": integrity_ok,
     }
     # simple innovation score
     innovation_score = 40
@@ -814,23 +1030,23 @@ def health_check():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM audit_log")
         audit_count = cursor.fetchone()[0]
-    
+
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
+        "version": _SETTINGS.api_version,
         "skyfield": SKYFIELD_AVAILABLE,
         "audit_records": audit_count,
-        "database": "connected"
+        "database": "connected",
     }
 
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 60)
-    print("ISS DIGITAL TWIN API")
-    print("=" * 60)
-    print(f"Skyfield available: {SKYFIELD_AVAILABLE}")
-    print(f"Database: {DATABASE_PATH}")
-    print(f"API Docs: http://localhost:8000/docs")
-    print(f"Health: http://localhost:8000/api/health")
-    print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+    logger.info("ISS Digital Twin API — skyfield=%s db=%s", SKYFIELD_AVAILABLE, _SETTINGS.database_path)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        log_level=_SETTINGS.log_level.lower(),
+    )
