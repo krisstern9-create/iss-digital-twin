@@ -31,6 +31,7 @@ import {
 } from './api'
 import { useToast } from './useToast'
 import { OrbitTrack2D } from './OrbitTrack2D'
+import { MODULE_SPECS } from './moduleSpecs'
 
 // ========== КОМПОНЕНТ ЗЕМЛИ (текстуры опциональны — без файлов работает запасной вид) ==========
 function Earth({ enabled, scaleMode }) {
@@ -298,6 +299,11 @@ function Scene({
   linkPair,
   freezeOrbit,
   issFocusMode,
+  explodedFactor = 0,       // ← ДОБАВЛЕНО
+  xrayMode = false,         // ← ДОБАВЛЕНО
+  onModuleClick,            // ← ДОБАВЛЕНО
+  onModuleHover, 
+  selectedModule,
 }) {
   const orbitRef = useRef()
   const stationRef = useRef()
@@ -434,6 +440,11 @@ function Scene({
             panelAngleDeg={panelAngleDeg}
             hiddenGroups={hiddenStlGroups}
             moduleColors={moduleColors}
+            explodedFactor={explodedFactor}   // ← ДОБАВЛЕНО
+            xrayMode={xrayMode}               // ← ДОБАВЛЕНО
+            onModuleClick={onModuleClick}     // ← ДОБАВЛЕНО
+            onModuleHover={onModuleHover}     // ← ДОБАВЛЕНО
+            selectedModule={selectedModule}
           />
         </group>
 
@@ -529,6 +540,13 @@ function App() {
   const savedOrbitTimeScaleRef = useRef(null)
 
   const [modules, setModules] = useState([])
+  const [exploded, setExploded] = useState(false)
+  const [hoveredModule, setHoveredModule] = useState(null)
+  const [selectedModule, setSelectedModule] = useState(null)
+  const [xrayMode, setXrayMode] = useState(false)
+  const handleModuleClick = (group) => {
+  setSelectedModule(prev => prev === group ? null : group)
+}
 
   const { toast, showToast, dismiss } = useToast(4500)
   // Карта цветов для 3D моделей (ТЗ п.3.2)
@@ -1573,9 +1591,9 @@ function App() {
             }}
           >
             <Stats />
-            <Scene
+            l<Scene
               modules={modules}
-              moduleColors={moduleColors}
+              modueColors={moduleColors}
               orientation={orientation}
               orbitHeightKm={orbitHeight}
               inclinationDeg={inclination}
@@ -1591,6 +1609,11 @@ function App() {
               issFocusMode={issDetailView}
               stations={stations}
               linkPair={issDetailView ? null : linkPair}
+              explodedFactor={exploded ? 1 : 0}
+              xrayMode={xrayMode}
+              onModuleClick={(group) => setSelectedModule(prev => prev === group ? null : group)}
+              selectedModule={selectedModule}
+              onModuleHover={setHoveredModule}
               onDockingDone={async () => {
                 if (dockingAnim?.replayOnly) {
                   setDockingAnim(null)
@@ -1713,6 +1736,119 @@ function App() {
             {isDocking ? `⏳ ${language === 'ru' ? 'Стыковка…' : 'Docking…'}` : `🔗 ${texts.docking}`}
           </button>
         </div>
+        <div className="button-row" style={{ marginTop: 12, gap: 8 }}>
+  <button
+    type="button"
+    className={`action-btn-large ${exploded ? 'active' : ''}`}
+    onClick={() => setExploded(!exploded)}
+    style={{
+      background: exploded ? 'rgba(0, 212, 255, 0.15)' : undefined,
+      border: exploded ? '1px solid #00d4ff' : undefined,
+      flex: 1
+    }}
+  >
+    {exploded ? '🔧 СБОРКА' : '💥 РАЗБОР (JARVIS)'}
+  </button>
+  <button
+    type="button"
+    className={`action-btn-large ${xrayMode ? 'active' : ''}`}
+    onClick={() => setXrayMode(!xrayMode)}
+    style={{
+      background: xrayMode ? 'rgba(0, 255, 255, 0.15)' : undefined,
+      border: xrayMode ? '1px solid #00ffff' : undefined,
+      flex: 1
+    }}
+  >
+    🩻 X-RAY
+  </button>
+</div>
+
+{selectedModule && (
+  <div style={{
+    marginTop: 12,
+    padding: '12px',
+    borderRadius: 8,
+    background: 'rgba(0, 212, 255, 0.1)',
+    border: '1px solid rgba(0, 212, 255, 0.4)',
+    boxShadow: '0 0 20px rgba(0, 212, 255, 0.2)',
+    fontSize: 12,
+    color: '#e0f2fe',
+    animation: 'holoFadeIn 0.3s ease-out'
+  }}>
+    {/* Заголовок с кнопкой закрытия */}
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid rgba(0, 212, 255, 0.3)' }}>
+      <span style={{ 
+        fontWeight: 'bold', 
+        color: '#00d4ff',
+        fontSize: 13,
+        textTransform: 'uppercase',
+        letterSpacing: '1px'
+      }}>
+        🔧 {selectedModule}
+      </span>
+      <button
+        type="button"
+        onClick={() => setSelectedModule(null)}
+        style={{
+          background: 'transparent',
+          border: '1px solid rgba(239, 68, 68, 0.6)',
+          color: '#ef4444',
+          cursor: 'pointer',
+          fontSize: 14,
+          padding: '2px 8px',
+          borderRadius: 4,
+          transition: 'all 0.2s'
+        }}
+        title="Закрыть"
+        onMouseEnter={(e) => e.target.style.background = 'rgba(239, 68, 68, 0.2)'}
+        onMouseLeave={(e) => e.target.style.background = 'transparent'}
+      >
+        ✕
+      </button>
+    </div>
+
+    {/* Характеристики модуля */}
+    <div style={{ fontSize: 11, lineHeight: 1.6 }}>
+      {(() => {
+        const specs = MODULE_SPECS[selectedModule] || MODULE_SPECS.default
+        return (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(232,238,248,0.7)' }}>📋 Тип:</span>
+              <span style={{ color: '#fff', fontWeight: 600 }}>{specs.type}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(232,238,248,0.7)' }}>⚖️ Масса:</span>
+              <span style={{ color: '#fff', fontWeight: 600 }}>{specs.mass}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(232,238,248,0.7)' }}>🔩 Материал:</span>
+              <span style={{ color: '#fff', fontWeight: 600 }}>{specs.material}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(232,238,248,0.7)' }}>📅 Запуск:</span>
+              <span style={{ color: '#fff', fontWeight: 600 }}>{specs.launch}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: 'rgba(232,238,248,0.7)' }}>📐 Объём:</span>
+              <span style={{ color: '#fff', fontWeight: 600 }}>{specs.volume}</span>
+            </div>
+            <div style={{ 
+              marginTop: 8, 
+              paddingTop: 8, 
+              borderTop: '1px solid rgba(0, 212, 255, 0.2)',
+              color: 'rgba(232,238,248,0.85)',
+              fontSize: 10.5,
+              lineHeight: 1.5
+            }}>
+              {specs.desc}
+            </div>
+          </>
+        )
+      })()}
+    </div>
+  </div>
+)}
 
         <div className="button-row" style={{ gridTemplateColumns: '1fr 1fr', marginTop: 10 }}>
           <button type="button" className="secondary-btn" onClick={exportSnapshot}>
